@@ -4,43 +4,54 @@ import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.proxy.websocket.InterceptedBinaryMessage;
 import burp.api.montoya.proxy.websocket.InterceptedTextMessage;
 import burp.api.montoya.proxy.websocket.ProxyWebSocketCreation;
-
-import javax.swing.*;
 import javax.swing.table.AbstractTableModel;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public class MyTableModel extends AbstractTableModel {
 
     private final MontoyaApi api;
-    // Guarded by 'this' for cross-thread reads; mutations dispatched to the EDT.
-    private final List<LogEntry> log = new ArrayList<>();
+    private final List<LogEntry> log;
+    private static class LogEntry {
+        private final ProxyWebSocketCreation webSocketCreated;
+        private final Object message;
+        private final String information;
 
-    // ── Inner record ─────────────────────────────────────────────────────────
 
-    private static final class LogEntry {
-        final ProxyWebSocketCreation webSocketCreated;
-        final Object                 message;   // InterceptedTextMessage or InterceptedBinaryMessage
-        final String                 information;
-
-        LogEntry(ProxyWebSocketCreation webSocketCreated, Object message, String information) {
+        public LogEntry(ProxyWebSocketCreation webSocketCreated, Object message,String information) {
             this.webSocketCreated = webSocketCreated;
-            this.message          = message;
-            this.information      = information;
+            this.message = message;
+            this.information = information;
+        }
+
+        public ProxyWebSocketCreation getWebSocketCreated() {
+            return webSocketCreated;
+        }
+
+        public Object getMessage() {
+            return message;
+        }
+
+        public String getInformation() {
+            return information;
+        }
+
+        public boolean isBinaryMessage() {
+            return message instanceof InterceptedBinaryMessage;
+        }
+
+        public boolean isTextMessage() {
+            return message instanceof InterceptedTextMessage;
         }
     }
 
-    // ── Constructor ───────────────────────────────────────────────────────────
-
     public MyTableModel(MontoyaApi api) {
         this.api = api;
+        this.log = new ArrayList<>(); // Initialize the list
     }
-
-    // ── AbstractTableModel ────────────────────────────────────────────────────
 
     @Override
     public synchronized int getRowCount() {
-        return log.size();
+        return log.size(); // Return the size of the list
     }
 
     @Override
@@ -51,64 +62,49 @@ public class MyTableModel extends AbstractTableModel {
     @Override
     public String getColumnName(int column) {
         return switch (column) {
-            case 0  -> "#";
-            case 1  -> "Host";
-            case 2  -> "Path";
-            case 3  -> "Information";
+            case 0 -> "#";
+            case 1 -> "Host";
+            case 2 -> "Path";
+            case 3 -> "Information";
             default -> "";
         };
-    }
-
-    @Override
-    public Class<?> getColumnClass(int columnIndex) {
-        // Allows the '#' sorter to treat the value as an Integer automatically.
-        return columnIndex == 0 ? Integer.class : String.class;
     }
 
     @Override
     public synchronized Object getValueAt(int rowIndex, int columnIndex) {
         LogEntry entry = log.get(rowIndex);
-        return switch (columnIndex) {
-            case 0  -> rowIndex + 1;
-            case 1  -> entry.webSocketCreated.upgradeRequest().headerValue("Host");
-            case 2  -> entry.webSocketCreated.upgradeRequest().pathWithoutQuery();
-            case 3  -> entry.information;
-            default -> "";
-        };
-    }
 
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /**
-     * Adds a new row to the table.  Safe to call from any thread — the Swing
-     * notification is always dispatched on the Event Dispatch Thread.
-     */
-    public void add(ProxyWebSocketCreation webSocketCreated, Object message, String information) {
-        if (!(message instanceof InterceptedTextMessage)
-                && !(message instanceof InterceptedBinaryMessage)) {
-            throw new IllegalArgumentException(
-                    "message must be InterceptedTextMessage or InterceptedBinaryMessage");
-        }
-
-        final int insertedIndex;
-        synchronized (this) {
-            log.add(new LogEntry(webSocketCreated, message, information));
-            insertedIndex = log.size() - 1;
-        }
-
-        // fireTableRowsInserted must be called on the EDT.
-        if (SwingUtilities.isEventDispatchThread()) {
-            fireTableRowsInserted(insertedIndex, insertedIndex);
-        } else {
-            SwingUtilities.invokeLater(() -> fireTableRowsInserted(insertedIndex, insertedIndex));
+        switch (columnIndex) {
+            case 0:
+                return rowIndex + 1; // Row number
+            case 1:
+                return entry.getWebSocketCreated().upgradeRequest().headerValue("Host"); // URL (String)
+            case 2:
+                return entry.getWebSocketCreated().upgradeRequest().pathWithoutQuery();
+            case 3:
+                if (!entry.getInformation().isEmpty()){
+                    return entry.getInformation();
+                }else {
+                    return "";
+                }
+            default:
+                return "";
         }
     }
 
-    /**
-     * Returns the raw message object at the given model row index.
-     * Used by the selection listener to populate the message viewer.
-     */
+    public synchronized void add(ProxyWebSocketCreation webSocketCreated, Object message,String information) {
+        if (!(message instanceof InterceptedBinaryMessage) && !(message instanceof InterceptedTextMessage)) {
+            throw new IllegalArgumentException("Message must be either InterceptedBinaryMessage or InterceptedTextMessage");
+        }
+
+        LogEntry entry = new LogEntry(webSocketCreated, message, information); // Create a new LogEntry
+        log.add(entry);
+        int index = log.size() - 1;
+        fireTableRowsInserted(index, index);
+    }
+
     public synchronized Object get(int rowIndex) {
-        return log.get(rowIndex).message;
+        LogEntry entry = log.get(rowIndex);
+        return entry.getMessage();
     }
 }

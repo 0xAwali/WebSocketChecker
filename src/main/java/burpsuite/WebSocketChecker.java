@@ -6,7 +6,6 @@ import burp.api.montoya.proxy.websocket.InterceptedBinaryMessage;
 import burp.api.montoya.proxy.websocket.InterceptedTextMessage;
 import burp.api.montoya.ui.UserInterface;
 import burp.api.montoya.ui.editor.WebSocketMessageEditor;
-
 import javax.swing.*;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableColumn;
@@ -14,57 +13,37 @@ import javax.swing.table.TableModel;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.util.Comparator;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 import static burp.api.montoya.core.ByteArray.byteArray;
 import static burp.api.montoya.ui.editor.EditorOptions.READ_ONLY;
 
 public class WebSocketChecker implements BurpExtension {
 
-    private MontoyaApi api;
-    // Shared, bounded thread pool reused across ALL message handlers.
-    // Sized to the number of available processors; keeps CPU usage reasonable
-    // without the massive overhead of ~100 threads per scanned message.
-    private ExecutorService executor;
+
+    MontoyaApi api;
 
     @Override
     public void initialize(MontoyaApi montoyaApi) {
-        this.api      = montoyaApi;
-        // Cap at 16 threads — plenty for parallel regex scanning.
-        int poolSize  = Math.min(Runtime.getRuntime().availableProcessors() * 2, 16);
-        this.executor = Executors.newFixedThreadPool(poolSize);
 
+        this.api = montoyaApi;
         MyTableModel table = new MyTableModel(api);
-
         api.extension().setName("WebSocket Checker");
-        api.userInterface().registerSuiteTab("WebSocket Checker", buildLoggerTab(table));
-        api.proxy().registerWebSocketCreationHandler(
-                new WebsocketCreatedHandler(table, api, executor));
+        api.userInterface().registerSuiteTab("Websocket Checker", LoggerTab(table));
+        api.proxy().registerWebSocketCreationHandler(new WebsocketCreatedHandler(table,api));
 
-        // Shut the executor down cleanly when the extension is unloaded.
-        api.extension().registerUnloadingHandler(() -> {
-            executor.shutdown();
-            try {
-                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                    executor.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                executor.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-        });
     }
 
-    private Component buildLoggerTab(MyTableModel table) {
+    private Component LoggerTab(MyTableModel table) {
+
         JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
 
-        UserInterface userInterface = api.userInterface();
-        WebSocketMessageEditor messageViewer = userInterface.createWebSocketMessageEditor(READ_ONLY);
 
+        UserInterface userInterface = api.userInterface();
+        WebSocketMessageEditor textMessageViewer = userInterface.createWebSocketMessageEditor(READ_ONLY);
         JTabbedPane requestTab = new JTabbedPane();
-        requestTab.addTab("Message", messageViewer.uiComponent());
+        requestTab.addTab("Message", textMessageViewer.uiComponent());
+
+
         splitPane.setRightComponent(requestTab);
 
         JTable jTable = new JTable(table) {
@@ -73,36 +52,44 @@ public class WebSocketChecker implements BurpExtension {
                 super.changeSelection(rowIndex, columnIndex, toggle, extend);
                 Object message = table.get(convertRowIndexToModel(rowIndex));
                 if (message instanceof InterceptedBinaryMessage) {
-                    messageViewer.setContents(((InterceptedBinaryMessage) message).payload());
+                    InterceptedBinaryMessage binaryMessage = (InterceptedBinaryMessage) message;
+                    textMessageViewer.setContents(binaryMessage.payload());
                 } else if (message instanceof InterceptedTextMessage) {
-                    messageViewer.setContents(byteArray(((InterceptedTextMessage) message).payload()));
+                    InterceptedTextMessage textMessage = (InterceptedTextMessage) message;
+                    textMessageViewer.setContents(byteArray(textMessage.payload()));
                 }
             }
         };
 
         jTable.setRowHeight(30);
-
+        jTable.setAutoCreateRowSorter(true);
         TableRowSorter<TableModel> sorter = new TableRowSorter<>(table);
-        // Sort the '#' column numerically, not lexicographically.
-        sorter.setComparator(0, Comparator.comparingInt(o -> (Integer) o));
         jTable.setRowSorter(sorter);
+
+        sorter.setComparator(0, new Comparator<Integer>() {
+            @Override
+            public int compare(Integer o1, Integer o2) {
+                return o1.compareTo(o2); // Compare as integers
+            }
+        });
+
         jTable.getRowSorter().toggleSortOrder(0);
 
-        // Centre-align the '#' column.
-        DefaultTableCellRenderer centreRenderer = new DefaultTableCellRenderer();
-        centreRenderer.setHorizontalAlignment(SwingConstants.CENTER);
-        jTable.getColumnModel().getColumn(0).setCellRenderer(centreRenderer);
+        DefaultTableCellRenderer centerRenderer = new DefaultTableCellRenderer();
+        centerRenderer.setHorizontalAlignment(SwingConstants.CENTER);
+        jTable.getColumnModel().getColumn(0).setCellRenderer(centerRenderer);
 
-        TableColumn idCol = jTable.getColumnModel().getColumn(0);
-        idCol.setMinWidth(50);
-        idCol.setMaxWidth(100);
+        TableColumn ID = jTable.getColumnModel().getColumn(0);
+        ID.setMinWidth(50);
+        ID.setMaxWidth(100);
 
-        TableColumn hostCol = jTable.getColumnModel().getColumn(1);
-        hostCol.setMinWidth(300);
-        hostCol.setMaxWidth(700);
+        TableColumn Host = jTable.getColumnModel().getColumn(1);
+        Host.setMinWidth(600);
+        Host.setMaxWidth(700);
 
-        splitPane.setLeftComponent(new JScrollPane(jTable));
-        splitPane.setDividerLocation(300);
+
+        JScrollPane scrollPane = new JScrollPane(jTable);
+        splitPane.setLeftComponent(scrollPane);
 
         return splitPane;
     }
